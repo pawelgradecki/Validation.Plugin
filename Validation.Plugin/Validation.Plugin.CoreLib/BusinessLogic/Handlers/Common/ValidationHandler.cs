@@ -7,6 +7,7 @@ using Odx.Xrm.Core;
 using Odx.Xrm.Core.DataAccess;
 using Microsoft.Xrm.Sdk.Metadata;
 using Microsoft.Crm.Sdk.Messages;
+using System.Collections.Generic;
 
 namespace Validation.Plugin.CoreLib.BusinessLogic.Handlers.Accounts
 {
@@ -14,13 +15,54 @@ namespace Validation.Plugin.CoreLib.BusinessLogic.Handlers.Accounts
     {
         public void Execute(ILocalPluginExecutionContext localContext, IRepositoryFactory repoFactory)
         {
-            var generalRepository = repoFactory.Get<IBaseRepository<Entity>>();
-
-            if (generalRepository.IsAdmin(localContext.Context.InitiatingUserId))
+            if (this.CheckIfUserIsAdmin(localContext, repoFactory))
             {
                 return;
             }
 
+            var entity = GetEntityFromContext(localContext);
+
+            var metadataRequest = new RetrieveEntityRequest()
+            {
+                LogicalName = entity.LogicalName,
+                EntityFilters = Microsoft.Xrm.Sdk.Metadata.EntityFilters.Attributes
+            };
+
+            var allRequredAttributes = GetAllRequiredAttributes(repoFactory, metadataRequest);
+
+            foreach (var attribute in allRequredAttributes)
+            {
+                var errorMessage = $"Attribute {attribute.LogicalName} is required. Please specify value for this attribute before saving record.";
+                if (!entity.Contains(attribute.LogicalName))
+                {
+                    throw new InvalidPluginExecutionException(errorMessage);
+                }
+                else
+                {
+                    var value = entity[attribute.LogicalName];
+                    if (value == null)
+                    {
+                        throw new InvalidPluginExecutionException(errorMessage);
+                    }
+                    else if (value is string && string.IsNullOrEmpty(value as string))
+                    {
+                        throw new InvalidPluginExecutionException(errorMessage);
+                    }
+                }
+            }
+        }
+
+        private IEnumerable<AttributeMetadata> GetAllRequiredAttributes(IRepositoryFactory repoFactory, RetrieveEntityRequest metadataRequest)
+        {
+            var generalRepository = repoFactory.Get<IBaseRepository>();
+            var metadata = generalRepository.Execute<RetrieveEntityRequest, RetrieveEntityResponse>(metadataRequest);
+            var attributeMetadataCollection = metadata.EntityMetadata.Attributes;
+            var allRequredAttributes = attributeMetadataCollection.Where(am => am.RequiredLevel.Value == AttributeRequiredLevel.ApplicationRequired);
+            return allRequredAttributes;
+        }
+
+        private Entity GetEntityFromContext(ILocalPluginExecutionContext localContext)
+        {
             var target = localContext.TargetEntity;
             var entity = new Entity(target.LogicalName);
             if (localContext.HasPreImage)
@@ -36,38 +78,15 @@ namespace Validation.Plugin.CoreLib.BusinessLogic.Handlers.Accounts
             {
                 entity[targetAttribute.Key] = targetAttribute.Value;
             }
-            
-            
-            var metadataRequest = new RetrieveEntityRequest()
-            {
-                LogicalName = target.LogicalName,
-                EntityFilters = Microsoft.Xrm.Sdk.Metadata.EntityFilters.Attributes
-            };
 
-            var metadata = generalRepository.Execute<RetrieveEntityRequest, RetrieveEntityResponse>(metadataRequest);
-            var attributeMetadataCollection = metadata.EntityMetadata.Attributes;
+            return entity;
+        }
 
-            var allRequredAttributes = attributeMetadataCollection.Where(am => am.RequiredLevel.Value == AttributeRequiredLevel.ApplicationRequired);
+        private bool CheckIfUserIsAdmin(ILocalPluginExecutionContext localContext, IRepositoryFactory repoFactory)
+        {
+            var generalRepository = repoFactory.Get<IBaseRepository>();
 
-            foreach (var attribute in allRequredAttributes)
-            {
-                if(!entity.Contains(attribute.LogicalName))
-                {
-                    throw new InvalidPluginExecutionException($"Attribute {attribute.LogicalName} is required. Please specify value for this attribute before saving record.");
-                }
-                else
-                {
-                    var value = entity[attribute.LogicalName];
-                    if(value == null)
-                    {
-                        throw new InvalidPluginExecutionException($"Attribute {attribute.LogicalName} is required. Please specify value for this attribute before saving record.");
-                    }
-                    else if (value is string && string.IsNullOrEmpty(value as string))
-                    {
-                        throw new InvalidPluginExecutionException($"Attribute {attribute.LogicalName} is required. Please specify value for this attribute before saving record.");
-                    }
-                }
-            }
+            return generalRepository.IsAdmin(localContext.Context.InitiatingUserId);
         }
     }
 }
